@@ -7,14 +7,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/chromedp/cdproto/emulation"
-	"github.com/chromedp/chromedp"
 	"github.com/camiloengineer/autoclocking-backend/internal/circuitbreaker"
 	"github.com/camiloengineer/autoclocking-backend/internal/config"
 	"github.com/camiloengineer/autoclocking-backend/internal/delay"
 	"github.com/camiloengineer/autoclocking-backend/internal/metrics"
 	"github.com/camiloengineer/autoclocking-backend/internal/reporter"
 	"github.com/camiloengineer/autoclocking-backend/internal/rut"
+	"github.com/chromedp/cdproto/emulation"
+	"github.com/chromedp/chromedp"
 )
 
 type Service struct {
@@ -59,7 +59,7 @@ func (s *Service) ProcessRUT(rutStr string) bool {
 		if success {
 			duration := time.Since(startTime).Seconds()
 			actionType := s.determineActionType()
-			
+
 			slog.Info("RUT processed successfully", "rut", rutMasked, "action_type", actionType, "duration", duration)
 			s.metrics.RecordSuccess(duration)
 			s.circuitBreaker.RecordSuccess()
@@ -67,7 +67,7 @@ func (s *Service) ProcessRUT(rutStr string) bool {
 		}
 
 		slog.Error(fmt.Sprintf("Attempt %d/%d failed for RUT %s: %v", attempt, maxAttempts, rutMasked, err))
-		
+
 		if attempt < maxAttempts {
 			retryDelay := time.Duration(s.execConfig.RetryDelaySeconds) * time.Second
 			slog.Info(fmt.Sprintf("Waiting %s before next attempt...", retryDelay))
@@ -129,10 +129,10 @@ func (s *Service) determineActionType() string {
 
 func (s *Service) executeRealMarcaje(rutStr, actionType string) (string, error) {
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
-		chromedp.Flag("headless", true),
 		chromedp.Flag("no-sandbox", true),
 		chromedp.Flag("disable-dev-shm-usage", true),
 		chromedp.Flag("disable-gpu", true),
+		chromedp.Flag("disable-software-rasterizer", true),
 		chromedp.WindowSize(1920, 1080),
 		chromedp.Flag("disable-geolocation", true),
 		chromedp.Flag("disable-extensions", true),
@@ -141,21 +141,20 @@ func (s *Service) executeRealMarcaje(rutStr, actionType string) (string, error) 
 		chromedp.UserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"),
 	)
 
-	allocCtx, cancelAlloc := chromedp.NewExecAllocator(context.Background(), opts...)
-	defer cancelAlloc()
+	allocCtx, cancel := chromedp.NewExecAllocator(context.Background(), opts...)
+	defer cancel()
 
-	ctx, cancelCtx := chromedp.NewContext(allocCtx)
-	defer cancelCtx()
+	ctx, cancel := chromedp.NewContext(allocCtx)
+	defer cancel()
 
-	ctx, cancelTimeout := context.WithTimeout(ctx, 30*time.Second)
-	defer cancelTimeout()
+	ctx, cancel = context.WithTimeout(ctx, 45*time.Second)
+	defer cancel()
 
-	// Navigate and wait for digit buttons to be visible
-	if err := chromedp.Run(ctx, 
+	if err := chromedp.Run(ctx,
 		chromedp.Navigate("https://app.ctrlit.cl/ctrl/dial/web/K1NBpBqyjf"),
-		chromedp.WaitVisible(`li.digits`, chromedp.ByQuery),
+		chromedp.WaitVisible(`#dial button`, chromedp.ByQuery),
 	); err != nil {
-		return "", fmt.Errorf("failed to navigate and wait for digits: %w", err)
+		return "", fmt.Errorf("failed to navigate and wait for action buttons: %w", err)
 	}
 
 	// Disable geolocation
@@ -182,6 +181,10 @@ func (s *Service) executeRealMarcaje(rutStr, actionType string) (string, error) 
 		return "", fmt.Errorf("failed to click action button: %w", err)
 	}
 
+	if err := chromedp.Run(ctx, chromedp.WaitVisible(`li.digits`, chromedp.ByQuery)); err != nil {
+		return "", fmt.Errorf("failed to wait for RUT keypad after action: %w", err)
+	}
+
 	// Enter RUT
 	err = s.enterRUT(ctx, rutStr)
 	if err != nil {
@@ -196,10 +199,10 @@ func (s *Service) executeRealMarcaje(rutStr, actionType string) (string, error) 
 
 	loc, _ := time.LoadLocation("America/Santiago")
 	now := time.Now().In(loc)
-	
-	msg := fmt.Sprintf("✅ %s successful at %s (Chile - CLT).\n📍 Geolocation: No coordinates\n📍 Location: No address\n\n", 
+
+	msg := fmt.Sprintf("✅ %s successful at %s (Chile - CLT).\n📍 Geolocation: No coordinates\n📍 Location: No address\n\n",
 		actionType, now.Format("15:04:05"))
-		
+
 	if actionType == "ENTRADA" {
 		msg += "Have a great day!"
 	} else {
@@ -238,7 +241,7 @@ func (s *Service) clickActionButton(ctx context.Context, actionType string) erro
 func (s *Service) enterRUT(ctx context.Context, rutStr string) error {
 	for _, ch := range rutStr {
 		charUpper := strings.ToUpper(string(ch))
-		
+
 		js := fmt.Sprintf(`
 			var els = document.querySelectorAll('li.digits');
 			var target = null;
@@ -283,6 +286,15 @@ func (s *Service) submitForm(ctx context.Context) error {
 	if res != "ok" {
 		return fmt.Errorf("ENVIAR button not found")
 	}
-	time.Sleep(1 * time.Second)
+	time.Sleep(2 * time.Second)
+
+	var readyState string
+	if err := chromedp.Run(ctx, chromedp.Evaluate(`document.readyState`, &readyState)); err != nil {
+		return fmt.Errorf("browser did not remain reachable after submit: %w", err)
+	}
+	if readyState == "" {
+		return fmt.Errorf("browser returned empty ready state after submit")
+	}
+
 	return nil
 }
