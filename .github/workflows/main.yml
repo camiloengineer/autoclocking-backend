@@ -1,0 +1,75 @@
+name: Marcaje Automático Diario (Go)
+
+on:
+  schedule:
+    # HORARIOS VERANO (UTC-3)
+    # Entrada AM verano: 08:10 CLT = 11:10 UTC
+    - cron: '10 11 * * *'
+    # Salida PM verano: 17:30 CLT = 20:30 UTC
+    - cron: '30 20 * * *'
+    
+    # HORARIOS INVIERNO (UTC-4)
+    # Entrada AM invierno: 08:10 CLT = 12:10 UTC
+    - cron: '10 12 * * *'
+    # Salida PM invierno: 17:30 CLT = 21:30 UTC
+    - cron: '30 21 * * *'
+    
+    # CRON Keep-alive (Días 1 y 15) para evitar suspensión por inactividad
+    - cron: '0 0 1,15 * *'
+
+  workflow_dispatch:
+    inputs:
+      debug_mode:
+        description: 'Activar DEBUG_MODE (simular marcaje sin enviar)'
+        required: false
+        default: 'false'
+        type: boolean
+
+jobs:
+  keep-alive:
+    if: github.event.schedule == '0 0 1,15 * *'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Hacer commit vacío
+        run: |
+          git config --global user.name "GitHub Actions Bot"
+          git config --global user.email "actions@github.com"
+          git commit --allow-empty -m "chore: keep-alive workflow [skip ci]"
+          git push
+
+  marcar-turno:
+    if: github.event.schedule != '0 0 1,15 * *'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          check-latest: true
+
+      - name: Install Chrome
+        run: |
+          wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
+          sudo sh -c 'echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google.list'
+          sudo apt-get update
+          sudo apt-get install -y google-chrome-stable
+        
+      - name: Build
+        run: go build -o marcaje ./cmd/marcaje
+
+      - name: Ejecutar marcaje
+        env:
+          ACTIVE_RUTS_B64: ${{ secrets.ACTIVE_RUTS_B64 }}
+          CLOCK_IN_ACTIVE: 'true'
+          DEBUG_MODE: ${{ github.event.inputs.debug_mode == 'true' && 'true' || 'false' }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GITHUB_RUN_NUMBER: ${{ github.run_number }}
+        run: ./marcaje
