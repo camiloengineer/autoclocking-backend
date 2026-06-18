@@ -43,12 +43,13 @@ type Payload struct {
 	Message    string `json:"message"`
 	Details    string `json:"details,omitempty"`
 	RutMasked  string `json:"rut_masked"`
+	RutKey     string `json:"rut_key,omitempty"`
 	RunNumber  string `json:"run_number"`
 	FechaCLT   string `json:"fecha_clt"`
 }
 
 // Report posts a result to the API. Returns true if persisted.
-func (r *Reporter) Report(actionType, status, message, details, rutMasked string) bool {
+func (r *Reporter) Report(actionType, status, message, details, rutMasked, rutKey string) bool {
 	loc, err := time.LoadLocation("America/Santiago")
 	if err != nil {
 		slog.Error("Failed to load timezone", "error", err)
@@ -64,6 +65,7 @@ func (r *Reporter) Report(actionType, status, message, details, rutMasked string
 		Message:    message,
 		Details:    details,
 		RutMasked:  rutMasked,
+		RutKey:     rutKey,
 		RunNumber:  runNumber,
 		FechaCLT:   now,
 	}

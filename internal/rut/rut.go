@@ -1,6 +1,8 @@
 package rut
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"strings"
 	"unicode"
 )
@@ -32,4 +34,10 @@ func Mask(rut string) string {
 		return strings.Repeat("*", len(rut))
 	}
 	return rut[:4] + strings.Repeat("*", len(rut)-4)
+}
+
+func Key(value string) string {
+	normalized := strings.ToLower(strings.NewReplacer(".", "", "-", "", " ", "").Replace(value))
+	sum := sha256.Sum256([]byte(normalized))
+	return hex.EncodeToString(sum[:])
 }

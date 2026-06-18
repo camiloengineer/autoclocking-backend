@@ -78,7 +78,7 @@ func (s *Service) reportHoliday(holiday Holiday, source string) {
 	details := fmt.Sprintf("Holiday: %s (%s). Source: %s. Configured RUTs: %d - [%s]",
 		holiday.Title, holiday.Type, source, s.activeRutsCount, maskedStr)
 
-	s.reporter.Report("FERIADO", "info", "Holiday detected", details, maskedStr)
+	s.reporter.Report("FERIADO", "info", "Holiday detected", details, maskedStr, "")
 }
 
 func (s *Service) checkOnlineAPI(today string) (Holiday, bool) {

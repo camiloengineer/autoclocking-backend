@@ -35,6 +35,7 @@ type Record struct {
 	Message    string    `json:"message" firestore:"message"`
 	Details    string    `json:"details" firestore:"details"`
 	RutMasked  string    `json:"rut_masked" firestore:"rut_masked"`
+	RutKey     string    `json:"rut_key,omitempty" firestore:"rut_key,omitempty"`
 	RunNumber  string    `json:"run_number" firestore:"run_number"`
 	FechaCLT   string    `json:"fecha_clt" firestore:"fecha_clt"`
 	CreatedAt  time.Time `json:"created_at" firestore:"created_at"`

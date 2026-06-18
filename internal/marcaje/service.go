@@ -46,6 +46,7 @@ func New(rep *reporter.Reporter, delayMgr *delay.Manager, debug bool, execCfg co
 
 func (s *Service) ProcessRUT(rutStr string) bool {
 	rutMasked := rut.Mask(rutStr)
+	rutKey := rut.Key(rutStr)
 	startTime := time.Now()
 
 	if !s.circuitBreaker.CanExecute() {
@@ -62,7 +63,7 @@ func (s *Service) ProcessRUT(rutStr string) bool {
 	}
 
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		success, err := s.processAttempt(rutStr, rutMasked, attempt, maxAttempts)
+		success, err := s.processAttempt(rutStr, rutMasked, rutKey, attempt, maxAttempts)
 		if success {
 			duration := time.Since(startTime).Seconds()
 			actionType := s.determineActionType()
@@ -87,7 +88,7 @@ func (s *Service) ProcessRUT(rutStr string) bool {
 	return false
 }
 
-func (s *Service) processAttempt(rutStr, rutMasked string, attempt, maxAttempts int) (bool, error) {
+func (s *Service) processAttempt(rutStr, rutMasked, rutKey string, attempt, maxAttempts int) (bool, error) {
 	slog.Info(fmt.Sprintf("Attempt %d/%d - Starting RUT %s", attempt, maxAttempts, rutMasked))
 
 	s.applyDelay(rutStr)
@@ -107,13 +108,13 @@ func (s *Service) processAttempt(rutStr, rutMasked string, attempt, maxAttempts 
 	} else {
 		result, err = s.executeRealMarcaje(rutStr, actionType)
 		if err != nil {
-			s.reporter.Report(actionType, "error", failureSummary(actionType), fmt.Sprintf("RUT %s\n%v", rutMasked, err), rutMasked)
+			s.reporter.Report(actionType, "error", failureSummary(actionType), fmt.Sprintf("RUT %s\n%v", rutMasked, err), rutMasked, rutKey)
 			return false, err
 		}
 	}
 
 	slog.Info("MARKING COMPLETED", "rut", rutMasked, "action_type", actionType, "status", result.Status)
-	s.reporter.Report(actionType, result.Status, result.Message, result.Details, rutMasked)
+	s.reporter.Report(actionType, result.Status, result.Message, result.Details, rutMasked, rutKey)
 	return true, nil
 }
 
