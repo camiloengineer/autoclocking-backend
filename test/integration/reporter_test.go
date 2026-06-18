@@ -10,8 +10,8 @@ import (
 
 func TestReporter_Report(t *testing.T) {
 	r := reporter.New()
-	
-	success := r.Report("ENTRADA", "success", "test-go-migration", "1234****")
+
+	success := r.Report("ENTRADA", "success", "Clock-in confirmed", "Recorded at 08:00:00 CLT.", "1234****")
 	if !success {
 		t.Errorf("Expected Report to return true, got false")
 	}

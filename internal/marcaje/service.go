@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"strings"
 	"time"
 
@@ -24,6 +25,12 @@ type Service struct {
 	execConfig     config.ExecutionConfig
 	metrics        *metrics.Collector
 	circuitBreaker *circuitbreaker.CircuitBreaker
+}
+
+type ExecutionResult struct {
+	Message string
+	Details string
+	Status  string
 }
 
 func New(rep *reporter.Reporter, delayMgr *delay.Manager, debug bool, execCfg config.ExecutionConfig, m *metrics.Collector, cb *circuitbreaker.CircuitBreaker) *Service {
@@ -88,21 +95,25 @@ func (s *Service) processAttempt(rutStr, rutMasked string, attempt, maxAttempts 
 	actionType := s.determineActionType()
 	slog.Info("EXECUTING marking", "rut", rutMasked, "action_type", actionType)
 
-	var message string
+	var result ExecutionResult
 	var err error
 
 	if s.debugMode {
-		message = fmt.Sprintf("🧪 DEBUG active: no real marking executed. Type: %s, Chile Time: %s", actionType, time.Now().Format("15:04:05"))
+		result = ExecutionResult{
+			Message: debugSummary(actionType),
+			Details: fmt.Sprintf("Debug mode active. No real %s was sent.", strings.ToLower(actionSummary(actionType))),
+			Status:  "info",
+		}
 	} else {
-		message, err = s.executeRealMarcaje(rutStr, actionType)
+		result, err = s.executeRealMarcaje(rutStr, actionType)
 		if err != nil {
-			s.reporter.Report(actionType, "error", fmt.Sprintf("❌ Error marking for RUT %s:\n%v", rutMasked, err), rutMasked)
+			s.reporter.Report(actionType, "error", failureSummary(actionType), fmt.Sprintf("RUT %s\n%v", rutMasked, err), rutMasked)
 			return false, err
 		}
 	}
 
-	slog.Info("MARKING COMPLETED", "rut", rutMasked, "action_type", actionType)
-	s.reporter.Report(actionType, "success", message, rutMasked)
+	slog.Info("MARKING COMPLETED", "rut", rutMasked, "action_type", actionType, "status", result.Status)
+	s.reporter.Report(actionType, result.Status, result.Message, result.Details, rutMasked)
 	return true, nil
 }
 
@@ -127,7 +138,7 @@ func (s *Service) determineActionType() string {
 	return "SALIDA"
 }
 
-func (s *Service) executeRealMarcaje(rutStr, actionType string) (string, error) {
+func (s *Service) executeRealMarcaje(rutStr, actionType string) (ExecutionResult, error) {
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.Flag("no-sandbox", true),
 		chromedp.Flag("disable-dev-shm-usage", true),
@@ -154,7 +165,7 @@ func (s *Service) executeRealMarcaje(rutStr, actionType string) (string, error) 
 		chromedp.Navigate("https://app.ctrlit.cl/ctrl/dial/web/K1NBpBqyjf"),
 		chromedp.WaitVisible(`#dial button`, chromedp.ByQuery),
 	); err != nil {
-		return "", fmt.Errorf("failed to navigate and wait for action buttons: %w", err)
+		return ExecutionResult{}, fmt.Errorf("failed to navigate and wait for action buttons: %w", err)
 	}
 
 	// Disable geolocation
@@ -178,38 +189,46 @@ func (s *Service) executeRealMarcaje(rutStr, actionType string) (string, error) 
 	// Click action button
 	err = s.clickActionButton(ctx, actionType)
 	if err != nil {
-		return "", fmt.Errorf("failed to click action button: %w", err)
+		return ExecutionResult{}, fmt.Errorf("failed to click action button: %w", err)
 	}
 
 	if err := chromedp.Run(ctx, chromedp.WaitVisible(`li.digits`, chromedp.ByQuery)); err != nil {
-		return "", fmt.Errorf("failed to wait for RUT keypad after action: %w", err)
+		return ExecutionResult{}, fmt.Errorf("failed to wait for RUT keypad after action: %w", err)
 	}
 
 	// Enter RUT
 	err = s.enterRUT(ctx, rutStr)
 	if err != nil {
-		return "", fmt.Errorf("failed to enter RUT: %w", err)
+		return ExecutionResult{}, fmt.Errorf("failed to enter RUT: %w", err)
 	}
 
 	// Submit form
-	err = s.submitForm(ctx)
+	portalText, err := s.submitForm(ctx)
 	if err != nil {
-		return "", fmt.Errorf("failed to submit form: %w", err)
+		return ExecutionResult{}, fmt.Errorf("failed to submit form: %w", err)
 	}
+	portalText = sanitizePortalText(portalText, rutStr)
 
 	loc, _ := time.LoadLocation("America/Santiago")
 	now := time.Now().In(loc)
 
-	msg := fmt.Sprintf("✅ %s successful at %s (Chile - CLT).\n📍 Geolocation: No coordinates\n📍 Location: No address\n\n",
-		actionType, now.Format("15:04:05"))
-
-	if actionType == "ENTRADA" {
-		msg += "Have a great day!"
-	} else {
-		msg += "Rest and enjoy your free time!"
+	normalizedPortalText := strings.ToLower(portalText)
+	if strings.Contains(normalizedPortalText, "marcas en mismo sentido") {
+		return ExecutionResult{
+			Message: duplicateSummary(actionType),
+			Details: duplicateDetails(actionType),
+			Status:  "info",
+		}, nil
+	}
+	if !strings.Contains(normalizedPortalText, "confirmar") {
+		return ExecutionResult{}, fmt.Errorf("portal response did not include a success confirmation: %s", strings.TrimSpace(portalText))
 	}
 
-	return msg, nil
+	return ExecutionResult{
+		Message: confirmedSummary(actionType),
+		Details: confirmedDetails(now.Format("15:04:05")),
+		Status:  "success",
+	}, nil
 }
 
 func (s *Service) clickActionButton(ctx context.Context, actionType string) error {
@@ -267,7 +286,7 @@ func (s *Service) enterRUT(ctx context.Context, rutStr string) error {
 	return nil
 }
 
-func (s *Service) submitForm(ctx context.Context) error {
+func (s *Service) submitForm(ctx context.Context) (string, error) {
 	js := `
 		var els = document.querySelectorAll('li.pad-action.digits');
 		var target = null;
@@ -281,20 +300,88 @@ func (s *Service) submitForm(ctx context.Context) error {
 	`
 	var res string
 	if err := chromedp.Run(ctx, chromedp.Evaluate(js, &res)); err != nil {
-		return err
+		return "", err
 	}
 	if res != "ok" {
-		return fmt.Errorf("ENVIAR button not found")
+		return "", fmt.Errorf("ENVIAR button not found")
 	}
 	time.Sleep(2 * time.Second)
 
 	var readyState string
 	if err := chromedp.Run(ctx, chromedp.Evaluate(`document.readyState`, &readyState)); err != nil {
-		return fmt.Errorf("browser did not remain reachable after submit: %w", err)
+		return "", fmt.Errorf("browser did not remain reachable after submit: %w", err)
 	}
 	if readyState == "" {
-		return fmt.Errorf("browser returned empty ready state after submit")
+		return "", fmt.Errorf("browser returned empty ready state after submit")
 	}
 
-	return nil
+	var bodyText string
+	if err := chromedp.Run(ctx, chromedp.Text(`body`, &bodyText, chromedp.ByQuery)); err != nil {
+		return "", fmt.Errorf("failed to read portal response after submit: %w", err)
+	}
+	slog.Info("Portal response after submit", "body_text", strings.TrimSpace(bodyText))
+
+	return bodyText, nil
+}
+
+func sanitizePortalText(bodyText, rutStr string) string {
+	replacer := strings.NewReplacer("\r\n", "\n", "\r", "\n")
+	normalized := replacer.Replace(bodyText)
+	normalized = strings.ReplaceAll(normalized, rutStr, rut.Mask(rutStr))
+
+	lines := strings.Split(normalized, "\n")
+	cleaned := make([]string, 0, len(lines))
+	blankStreak := 0
+	whitespacePattern := regexp.MustCompile(`\s+`)
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			blankStreak++
+			if blankStreak > 1 {
+				continue
+			}
+			cleaned = append(cleaned, "")
+			continue
+		}
+
+		blankStreak = 0
+		cleaned = append(cleaned, whitespacePattern.ReplaceAllString(trimmed, " "))
+	}
+
+	return strings.TrimSpace(strings.Join(cleaned, "\n"))
+}
+
+func actionSummary(actionType string) string {
+	if actionType == "ENTRADA" {
+		return "Clock-in"
+	}
+	if actionType == "SALIDA" {
+		return "Clock-out"
+	}
+	return "Clocking"
+}
+
+func confirmedSummary(actionType string) string {
+	return fmt.Sprintf("%s confirmed", actionSummary(actionType))
+}
+
+func duplicateSummary(actionType string) string {
+	return fmt.Sprintf("Duplicate %s prevented", strings.ToLower(actionSummary(actionType)))
+}
+
+func failureSummary(actionType string) string {
+	return fmt.Sprintf("%s failed", actionSummary(actionType))
+}
+
+func debugSummary(actionType string) string {
+	return fmt.Sprintf("%s debug simulation", actionSummary(actionType))
+}
+
+func confirmedDetails(timeLabel string) string {
+	return fmt.Sprintf("Recorded at %s CLT.", timeLabel)
+}
+
+func duplicateDetails(actionType string) string {
+	return fmt.Sprintf("%s was already registered for this direction.", actionSummary(actionType))
 }

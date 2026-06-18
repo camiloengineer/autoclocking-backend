@@ -13,11 +13,11 @@ import (
 
 // Service checks for holidays in Chile.
 type Service struct {
-	reporter           *reporter.Reporter
-	activeRutsCount    int
-	activeRutsMasked   []string
-	apiURL             string
-	httpClient         *http.Client
+	reporter         *reporter.Reporter
+	activeRutsCount  int
+	activeRutsMasked []string
+	apiURL           string
+	httpClient       *http.Client
 }
 
 // New creates a new Holiday Service.
@@ -75,15 +75,15 @@ func (s *Service) IsHoliday() bool {
 
 func (s *Service) reportHoliday(holiday Holiday, source string) {
 	maskedStr := strings.Join(s.activeRutsMasked, ", ")
-	message := fmt.Sprintf("Holiday: %s (%s). Source: %s. Configured RUTs: %d - [%s]",
+	details := fmt.Sprintf("Holiday: %s (%s). Source: %s. Configured RUTs: %d - [%s]",
 		holiday.Title, holiday.Type, source, s.activeRutsCount, maskedStr)
 
-	s.reporter.Report("FERIADO", "info", message, maskedStr)
+	s.reporter.Report("FERIADO", "info", "Holiday detected", details, maskedStr)
 }
 
 func (s *Service) checkOnlineAPI(today string) (Holiday, bool) {
 	slog.Info("🌐 Querying online holidays API...")
-	
+
 	req, err := http.NewRequest("GET", s.apiURL, nil)
 	if err != nil {
 		slog.Warn("Failed to create request for holiday API", "error", err)

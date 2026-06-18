@@ -11,8 +11,8 @@ import (
 )
 
 const (
-	DefaultAPIURL          = "https://marcajes-vg7vvkcauq-ue.a.run.app"
-	RequestTimeoutSeconds  = 15
+	DefaultAPIURL         = "https://marcajes-vg7vvkcauq-ue.a.run.app"
+	RequestTimeoutSeconds = 15
 )
 
 // Reporter sends attendance marking results to the Cloud Function.
@@ -41,19 +41,20 @@ type Payload struct {
 	ActionType string `json:"action_type"`
 	Status     string `json:"status"`
 	Message    string `json:"message"`
+	Details    string `json:"details,omitempty"`
 	RutMasked  string `json:"rut_masked"`
 	RunNumber  string `json:"run_number"`
 	FechaCLT   string `json:"fecha_clt"`
 }
 
 // Report posts a result to the API. Returns true if persisted.
-func (r *Reporter) Report(actionType, status, message, rutMasked string) bool {
+func (r *Reporter) Report(actionType, status, message, details, rutMasked string) bool {
 	loc, err := time.LoadLocation("America/Santiago")
 	if err != nil {
 		slog.Error("Failed to load timezone", "error", err)
 		loc = time.UTC
 	}
-	
+
 	now := time.Now().In(loc).Format("2006-01-02 15:04:05")
 	runNumber := os.Getenv("GITHUB_RUN_NUMBER")
 
@@ -61,6 +62,7 @@ func (r *Reporter) Report(actionType, status, message, rutMasked string) bool {
 		ActionType: actionType,
 		Status:     status,
 		Message:    message,
+		Details:    details,
 		RutMasked:  rutMasked,
 		RunNumber:  runNumber,
 		FechaCLT:   now,
