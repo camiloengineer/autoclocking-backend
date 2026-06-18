@@ -1,5 +1,6 @@
 .env
 data/
 marcaje
+marcajes-api
 __pycache__/
 *.pyc
