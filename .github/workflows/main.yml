@@ -44,7 +44,7 @@ jobs:
     if: github.event.schedule != '0 0 1,15 * *'
     runs-on: ubuntu-latest
     timeout-minutes: 40
-    
+
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -54,17 +54,56 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Load RUT config
+        id: rut
+        env:
+          RUTS_API_URL: https://autoclocking-ruts-vg7vvkcauq-ue.a.run.app/ruts
+        run: |
+          python3 - <<'PY'
+          import base64
+          import json
+          import os
+          import sys
+          import urllib.request
+
+          url = os.environ["RUTS_API_URL"]
+          with urllib.request.urlopen(url, timeout=20) as response:
+              payload = json.load(response)
+
+          items = payload.get("items") or []
+          active_ruts = [
+              str(item.get("rut", "")).strip()
+              for item in items
+              if bool(item.get("active")) and str(item.get("rut", "")).strip()
+          ]
+          output_path = os.environ["GITHUB_OUTPUT"]
+
+          if not active_ruts:
+              with open(output_path, "a", encoding="utf-8") as handle:
+                  handle.write("should_run=false\n")
+                  handle.write("active_ruts_b64=\n")
+              sys.exit(0)
+
+          active_ruts_b64 = base64.b64encode(json.dumps(active_ruts).encode("utf-8")).decode("ascii")
+
+          with open(output_path, "a", encoding="utf-8") as handle:
+              handle.write("should_run=true\n")
+              handle.write(f"active_ruts_b64={active_ruts_b64}\n")
+          PY
+
       - name: Setup Chrome
         uses: browser-actions/setup-chrome@v1
         with:
           chrome-version: stable
-        
+
       - name: Build
+        if: steps.rut.outputs.should_run == 'true'
         run: go build -o marcaje ./cmd/marcaje
 
       - name: Ejecutar marcaje
+        if: steps.rut.outputs.should_run == 'true'
         env:
-          ACTIVE_RUTS_B64: ${{ secrets.ACTIVE_RUTS_B64 }}
+          ACTIVE_RUTS_B64: ${{ steps.rut.outputs.active_ruts_b64 }}
           CLOCK_IN_ACTIVE: 'true'
           DEBUG_MODE: ${{ github.event.inputs.debug_mode == 'true' && 'true' || 'false' }}
           GITHUB_EVENT_NAME: ${{ github.event_name }}

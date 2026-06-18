@@ -33,7 +33,7 @@ func Load() (*Config, error) {
 	clockInActive := strings.ToLower(os.Getenv("CLOCK_IN_ACTIVE")) == "true"
 	debugMode := strings.ToLower(os.Getenv("DEBUG_MODE")) == "true"
 
-	ruts, err := loadRUTs()
+	ruts, err := loadRUTs(true)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load RUTs: %w", err)
 	}
@@ -54,7 +54,7 @@ func Load() (*Config, error) {
 	}
 
 	cbThreshold, _ := strconv.Atoi(getEnvOrDefault("CIRCUIT_BREAKER_THRESHOLD", "3"))
-	
+
 	enableMetrics := strings.ToLower(getEnvOrDefault("ENABLE_METRICS", "true")) == "true"
 
 	return &Config{
@@ -78,11 +78,19 @@ func getEnvOrDefault(key, defaultValue string) string {
 	return defaultValue
 }
 
-func loadRUTs() ([]string, error) {
+func LoadInitialRUTs() ([]string, error) {
+	_ = godotenv.Load()
+	return loadRUTs(false)
+}
+
+func loadRUTs(required bool) ([]string, error) {
 	rutsB64 := os.Getenv("ACTIVE_RUTS_B64")
 	rutsEnv := os.Getenv("ACTIVE_RUTS")
 
 	if rutsB64 == "" && rutsEnv == "" {
+		if !required {
+			return nil, nil
+		}
 		return nil, fmt.Errorf("neither ACTIVE_RUTS_B64 nor ACTIVE_RUTS are configured")
 	}
 
