@@ -9,7 +9,9 @@ import (
 
 	"cloud.google.com/go/firestore"
 
+	"github.com/camiloengineer/autoclocking-backend/internal/marcajes"
 	"github.com/camiloengineer/autoclocking-backend/internal/marcajesapi"
+	"github.com/camiloengineer/autoclocking-backend/internal/marcajesstore"
 )
 
 func main() {
@@ -20,11 +22,15 @@ func main() {
 		os.Getenv("GOOGLE_CLOUD_PROJECT"),
 		os.Getenv("GCP_PROJECT"),
 	)
-	var store marcajesapi.Store
+	var store marcajes.Store
 	if projectID == "" {
-		storePath := getEnvOrDefault("MARCJE_STORAGE_FILE", "./data/marcajes.json")
+		storePath := firstNonEmpty(
+			os.Getenv("MARCAJE_STORAGE_FILE"),
+			os.Getenv("MARCJE_STORAGE_FILE"),
+			"./data/marcajes.json",
+		)
 		slog.Info("Using file-backed marcajes store", "path", storePath)
-		store = marcajesapi.NewFileStore(storePath)
+		store = marcajesstore.NewFileStore(storePath)
 	} else {
 		ctx := context.Background()
 		client, err := firestore.NewClient(ctx, projectID)
@@ -33,7 +39,7 @@ func main() {
 			os.Exit(1)
 		}
 		defer client.Close()
-		store = marcajesapi.NewFirestoreStore(client)
+		store = marcajesstore.NewFirestoreStore(client)
 	}
 
 	server := marcajesapi.NewServer(store)

@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	DefaultAPIURL         = "https://marcajes-vg7vvkcauq-ue.a.run.app"
+	DefaultAPIURL         = "https://marcajes-vg7vvkcauq-ue.a.run.app/marcajes"
 	RequestTimeoutSeconds = 15
 )
 

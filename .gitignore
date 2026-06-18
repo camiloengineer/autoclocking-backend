@@ -1,2 +1,5 @@
 .env
 data/
+marcaje
+__pycache__/
+*.pyc

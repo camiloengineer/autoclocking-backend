@@ -1,59 +1,19 @@
 package marcajesapi
 
 import (
-	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"strconv"
 	"time"
-)
 
-const (
-	DefaultLimit = 100
-	MaxLimit     = 500
+	"github.com/camiloengineer/autoclocking-backend/internal/marcajes"
 )
-
-var (
-	validActions = map[string]struct{}{
-		"ENTRADA": {},
-		"SALIDA":  {},
-		"FERIADO": {},
-	}
-	validStatuses = map[string]struct{}{
-		"success": {},
-		"error":   {},
-		"info":    {},
-	}
-)
-
-type Store interface {
-	AddMarcaje(context.Context, MarcajeRecord) (string, error)
-	ListMarcajes(context.Context, int) ([]MarcajeRecord, error)
-}
 
 type Server struct {
-	store Store
+	store marcajes.Store
 }
 
-type MarcajeRecord struct {
-	ID         string    `json:"id,omitempty" firestore:"-"`
-	ActionType string    `json:"action_type" firestore:"action_type"`
-	Status     string    `json:"status" firestore:"status"`
-	Message    string    `json:"message" firestore:"message"`
-	Details    string    `json:"details" firestore:"details"`
-	RutMasked  string    `json:"rut_masked" firestore:"rut_masked"`
-	RunNumber  string    `json:"run_number" firestore:"run_number"`
-	FechaCLT   string    `json:"fecha_clt" firestore:"fecha_clt"`
-	CreatedAt  time.Time `json:"created_at" firestore:"created_at"`
-}
-
-type marcajesResponse struct {
-	Count int             `json:"count"`
-	Items []MarcajeRecord `json:"items"`
-}
-
-func NewServer(store Store) *Server {
+func NewServer(store marcajes.Store) *Server {
 	return &Server{store: store}
 }
 
@@ -80,13 +40,13 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
-	var payload MarcajeRecord
+	var payload marcajes.Record
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "JSON body is required"})
 		return
 	}
 
-	if err := validatePayload(payload); err != nil {
+	if err := marcajes.ValidateRecord(payload); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
@@ -110,7 +70,7 @@ func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, marcajesResponse{
+	writeJSON(w, http.StatusOK, marcajes.Response{
 		Count: len(items),
 		Items: items,
 	})
@@ -118,31 +78,21 @@ func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 
 func parseLimit(raw string) int {
 	if raw == "" {
-		return DefaultLimit
+		return marcajes.DefaultLimit
 	}
 
 	value, err := strconv.Atoi(raw)
 	if err != nil {
-		return DefaultLimit
+		return marcajes.DefaultLimit
 	}
 
 	if value < 1 {
 		return 1
 	}
-	if value > MaxLimit {
-		return MaxLimit
+	if value > marcajes.MaxLimit {
+		return marcajes.MaxLimit
 	}
 	return value
-}
-
-func validatePayload(payload MarcajeRecord) error {
-	if _, ok := validActions[payload.ActionType]; !ok {
-		return errors.New("Invalid action_type or status")
-	}
-	if _, ok := validStatuses[payload.Status]; !ok {
-		return errors.New("Invalid action_type or status")
-	}
-	return nil
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {
