@@ -12,7 +12,6 @@ import (
 )
 
 type ExecutionConfig struct {
-	MaxWorkers              int
 	RetryAttempts           int
 	RetryDelaySeconds       int
 	CircuitBreakerThreshold int
@@ -38,11 +37,6 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("failed to load RUTs: %w", err)
 	}
 
-	maxWorkers, _ := strconv.Atoi(getEnvOrDefault("MAX_WORKERS", "2"))
-	if maxWorkers < 1 || maxWorkers > 10 {
-		maxWorkers = 2
-	}
-
 	retryAttempts, _ := strconv.Atoi(getEnvOrDefault("RETRY_ATTEMPTS", "3"))
 	if retryAttempts < 0 || retryAttempts > 10 {
 		retryAttempts = 3
@@ -62,7 +56,6 @@ func Load() (*Config, error) {
 		DebugMode:     debugMode,
 		ActiveRUTs:    ruts,
 		Execution: ExecutionConfig{
-			MaxWorkers:              maxWorkers,
 			RetryAttempts:           retryAttempts,
 			RetryDelaySeconds:       retryDelay,
 			CircuitBreakerThreshold: cbThreshold,

@@ -4,7 +4,6 @@ import (
 	"log/slog"
 	"os"
 	"sync"
-	"time"
 
 	"github.com/camiloengineer/autoclocking-backend/internal/circuitbreaker"
 	"github.com/camiloengineer/autoclocking-backend/internal/config"
@@ -62,22 +61,15 @@ func main() {
 }
 
 func processRUTs(cfg *config.Config, marcajeSvc *marcaje.Service, metricsCol *metrics.Collector) {
-	slog.Info("Starting processing", "max_workers", cfg.Execution.MaxWorkers, "total_ruts", len(cfg.ActiveRUTs))
+	slog.Info("Starting parallel processing", "total_ruts", len(cfg.ActiveRUTs))
 
-	sem := make(chan struct{}, cfg.Execution.MaxWorkers)
 	var wg sync.WaitGroup
 
 	for _, r := range cfg.ActiveRUTs {
 		wg.Add(1)
-		sem <- struct{}{} // Acquire token
 
 		go func(r string) {
 			defer wg.Done()
-			defer func() { <-sem }() // Release token
-			
-			// Small stagger delay for threads to not hit immediately at the same millisecond
-			time.Sleep(100 * time.Millisecond)
-
 			marcajeSvc.ProcessRUT(r)
 		}(r)
 	}
