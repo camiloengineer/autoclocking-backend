@@ -14,6 +14,7 @@ import (
 	"github.com/camiloengineer/autoclocking-backend/internal/metrics"
 	"github.com/camiloengineer/autoclocking-backend/internal/reporter"
 	"github.com/camiloengineer/autoclocking-backend/internal/rut"
+	"github.com/camiloengineer/autoclocking-backend/internal/schedule"
 	"github.com/chromedp/cdproto/emulation"
 	"github.com/chromedp/chromedp"
 )
@@ -91,9 +92,9 @@ func (s *Service) ProcessRUT(rutStr string) bool {
 func (s *Service) processAttempt(rutStr, rutMasked, rutKey string, attempt, maxAttempts int) (bool, error) {
 	slog.Info(fmt.Sprintf("Attempt %d/%d - Starting RUT %s", attempt, maxAttempts, rutMasked))
 
-	s.applyDelay(rutStr)
-
 	actionType := s.determineActionType()
+	s.applyDelay(rutStr, actionType)
+
 	slog.Info("EXECUTING marking", "rut", rutMasked, "action_type", actionType)
 
 	var result ExecutionResult
@@ -118,16 +119,46 @@ func (s *Service) processAttempt(rutStr, rutMasked, rutKey string, attempt, maxA
 	return true, nil
 }
 
-func (s *Service) applyDelay(rutStr string) {
-	if !s.debugMode {
-		delayMins := s.delayManager.GetRandomDelay(rutStr)
-		slog.Info(fmt.Sprintf("Applying delay of %d minutes for RUT %s", delayMins, rut.Mask(rutStr)))
-		s.metrics.RecordDelayApplied()
-		time.Sleep(time.Duration(delayMins) * time.Minute)
-		slog.Info(fmt.Sprintf("Delay completed for RUT %s", rut.Mask(rutStr)))
-	} else {
+func (s *Service) applyDelay(rutStr, actionType string) {
+	if s.debugMode {
 		slog.Info("DEBUG mode active: no delay", "rut", rut.Mask(rutStr))
+		return
 	}
+
+	delayMins := s.delayManager.GetRandomDelay(rutStr)
+	s.metrics.RecordDelayApplied()
+
+	if actionType == "ENTRADA" {
+		s.waitForEntryAnchor(rutStr, delayMins)
+		return
+	}
+
+	slog.Info(fmt.Sprintf("Applying delay of %d minutes for RUT %s", delayMins, rut.Mask(rutStr)))
+	time.Sleep(time.Duration(delayMins) * time.Minute)
+	slog.Info(fmt.Sprintf("Delay completed for RUT %s", rut.Mask(rutStr)))
+}
+
+func (s *Service) waitForEntryAnchor(rutStr string, delayMins int) {
+	loc, err := time.LoadLocation("America/Santiago")
+	if err != nil {
+		slog.Error("Could not load America/Santiago timezone; applying delay from now", "error", err)
+		time.Sleep(time.Duration(delayMins) * time.Minute)
+		return
+	}
+
+	now := time.Now().In(loc)
+	target := time.Date(now.Year(), now.Month(), now.Day(), schedule.EntryAnchorHour, schedule.EntryAnchorMin, 0, 0, loc).
+		Add(time.Duration(delayMins) * time.Minute)
+
+	wait := time.Until(target)
+	if wait <= 0 {
+		slog.Info(fmt.Sprintf("Entry anchor %s already passed; marking immediately for RUT %s", target.Format("15:04"), rut.Mask(rutStr)))
+		return
+	}
+
+	slog.Info(fmt.Sprintf("Waiting until %s (anchor 08:00 + %d min) for RUT %s", target.Format("15:04"), delayMins, rut.Mask(rutStr)))
+	time.Sleep(wait)
+	slog.Info(fmt.Sprintf("Anchored wait completed for RUT %s", rut.Mask(rutStr)))
 }
 
 func (s *Service) determineActionType() string {
