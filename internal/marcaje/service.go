@@ -182,6 +182,7 @@ func (s *Service) executeRealMarcaje(rutStr, actionType string) (ExecutionResult
 		chromedp.Flag("disable-plugins", true),
 		chromedp.Flag("disable-images", true),
 		chromedp.UserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"),
+		chromedp.WSURLReadTimeout(40*time.Second),
 	)
 
 	allocCtx, cancel := chromedp.NewExecAllocator(context.Background(), opts...)
