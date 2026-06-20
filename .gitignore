@@ -4,3 +4,7 @@ marcaje
 marcajes-api
 __pycache__/
 *.pyc
+AGENTS.md
+CLAUDE.md
+GEMINI.md
+.claude/
