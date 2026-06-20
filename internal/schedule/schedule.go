@@ -42,6 +42,11 @@ func ShouldRun() bool {
 
 	now := time.Now().In(loc)
 
+	if now.Weekday() == time.Saturday || now.Weekday() == time.Sunday {
+		slog.Info("Weekend: marking skipped.", "weekday", now.Weekday().String())
+		return false
+	}
+
 	for _, w := range windows {
 		if w.contains(now) {
 			return true
