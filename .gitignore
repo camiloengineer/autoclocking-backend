@@ -1,7 +1,7 @@
 .env
 data/
-marcaje
-marcajes-api
+/marcaje
+/marcajes-api
 __pycache__/
 *.pyc
 AGENTS.md
