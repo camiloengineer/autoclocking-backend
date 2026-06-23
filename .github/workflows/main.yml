@@ -3,14 +3,14 @@ name: Marcaje Automático Diario (Go)
 on:
   schedule:
     # HORARIOS VERANO (UTC-3)
-    # Entrada AM verano: dispara 07:40 CLT = 10:40 UTC (colchon de atraso; marca anclada a 08:00)
-    - cron: '40 10 * * 1-5'
+    # Entrada AM verano: 08:10 CLT = 11:10 UTC
+    - cron: '10 11 * * 1-5'
     # Salida PM verano: 17:30 CLT = 20:30 UTC
     - cron: '30 20 * * 1-5'
 
     # HORARIOS INVIERNO (UTC-4)
-    # Entrada AM invierno: dispara 07:40 CLT = 11:40 UTC (colchon de atraso; marca anclada a 08:00)
-    - cron: '40 11 * * 1-5'
+    # Entrada AM invierno: 08:10 CLT = 12:10 UTC
+    - cron: '10 12 * * 1-5'
     # Salida PM invierno: 17:30 CLT = 21:30 UTC
     - cron: '30 21 * * 1-5'
     
