@@ -25,7 +25,7 @@ type window struct {
 
 var windows = []window{
 	{startHour: 7, startMin: 40, endHour: 8, endMin: 30},
-	{startHour: 17, startMin: 5, endHour: 17, endMin: 55},
+	{startHour: 17, startMin: 5, endHour: 18, endMin: 30},
 }
 
 // ShouldRun validates dynamically if the cron corresponds to a Chile time window.
