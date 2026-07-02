@@ -2,9 +2,11 @@
 
 Invoked daily by Cloud Scheduler. Deletes every document in the ``marcajes``
 collection whose ``created_at`` is older than ``RETENTION_DAYS`` days, keeping a
-rolling window. Strictly scoped to ``marcajes`` so sibling collections in the
-shared default database are never touched. A ``dry_run`` flag reports the count
-that would be deleted without mutating anything.
+rolling window. The default of 40 days sits safely beyond the dashboard's 30-day
+healthcheck window so purged data is never data any view still renders. Strictly
+scoped to ``marcajes`` so sibling collections in the shared default database are
+never touched. A ``dry_run`` flag reports the count that would be deleted without
+mutating anything.
 """
 from __future__ import annotations
 
@@ -18,7 +20,7 @@ from flask import Request
 from google.cloud import firestore
 
 COLLECTION = "marcajes"
-RETENTION_DAYS = int(os.environ.get("RETENTION_DAYS", "30"))
+RETENTION_DAYS = int(os.environ.get("RETENTION_DAYS", "40"))
 BATCH_SIZE = 400
 
 _db = firestore.Client()
