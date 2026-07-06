@@ -2,17 +2,10 @@ name: Marcaje Automático Diario (Go)
 
 on:
   schedule:
-    # HORARIOS VERANO (UTC-3)
-    # Entrada AM verano: 08:10 CLT = 11:10 UTC
-    - cron: '10 11 * * 1-5'
-    # Salida PM verano: 17:30 CLT = 20:30 UTC
-    - cron: '30 20 * * 1-5'
-
-    # HORARIOS INVIERNO (UTC-4)
-    # Entrada AM invierno: 08:10 CLT = 12:10 UTC
-    - cron: '10 12 * * 1-5'
-    # Salida PM invierno: 17:30 CLT = 21:30 UTC
-    - cron: '30 21 * * 1-5'
+    # El marcaje ya NO se dispara por cron de GitHub (scheduling poco confiable:
+    # atrasos/drops que caen fuera de la ventana horaria y saltan la marca en
+    # silencio). Lo dispara Cloud Scheduler via workflow_dispatch: jobs
+    # marcaje-entrada (08:00 CLT) y marcaje-salida (17:30 CLT), TZ America/Santiago.
     
     # CRON Keep-alive (Días 1 y 15) para evitar suspensión por inactividad
     - cron: '0 0 1,15 * *'
