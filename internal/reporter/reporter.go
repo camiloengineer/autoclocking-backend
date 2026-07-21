@@ -38,18 +38,17 @@ func New() *Reporter {
 
 // Payload represents the JSON body sent to the API.
 type Payload struct {
-	ActionType string `json:"action_type"`
-	Status     string `json:"status"`
-	Message    string `json:"message"`
-	Details    string `json:"details,omitempty"`
-	RutMasked  string `json:"rut_masked"`
-	RutKey     string `json:"rut_key,omitempty"`
-	RunNumber  string `json:"run_number"`
-	FechaCLT   string `json:"fecha_clt"`
+	ActionType  string `json:"action_type"`
+	Status      string `json:"status"`
+	Message     string `json:"message"`
+	Details     string `json:"details,omitempty"`
+	EmailMasked string `json:"email_masked"`
+	RunNumber   string `json:"run_number"`
+	FechaCLT    string `json:"fecha_clt"`
 }
 
 // Report posts a result to the API. Returns true if persisted.
-func (r *Reporter) Report(actionType, status, message, details, rutMasked, rutKey string) bool {
+func (r *Reporter) Report(actionType, status, message, details, emailMasked string) bool {
 	loc, err := time.LoadLocation("America/Santiago")
 	if err != nil {
 		slog.Error("Failed to load timezone", "error", err)
@@ -60,14 +59,13 @@ func (r *Reporter) Report(actionType, status, message, details, rutMasked, rutKe
 	runNumber := os.Getenv("GITHUB_RUN_NUMBER")
 
 	payload := Payload{
-		ActionType: actionType,
-		Status:     status,
-		Message:    message,
-		Details:    details,
-		RutMasked:  rutMasked,
-		RutKey:     rutKey,
-		RunNumber:  runNumber,
-		FechaCLT:   now,
+		ActionType:  actionType,
+		Status:      status,
+		Message:     message,
+		Details:     details,
+		EmailMasked: emailMasked,
+		RunNumber:   runNumber,
+		FechaCLT:    now,
 	}
 
 	bodyBytes, err := json.Marshal(payload)
@@ -91,7 +89,7 @@ func (r *Reporter) Report(actionType, status, message, details, rutMasked, rutKe
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusCreated {
-		slog.Info(fmt.Sprintf("Marcaje reported to API for RUT %s (%s/%s)", rutMasked, actionType, status))
+		slog.Info(fmt.Sprintf("Marcaje reported to API for %s (%s/%s)", emailMasked, actionType, status))
 		return true
 	}
 

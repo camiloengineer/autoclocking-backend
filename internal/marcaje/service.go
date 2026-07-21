@@ -4,20 +4,20 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"regexp"
 	"strings"
 	"time"
 
+	"github.com/camiloengineer/autoclocking-backend/internal/accounts"
+	"github.com/camiloengineer/autoclocking-backend/internal/buk"
 	"github.com/camiloengineer/autoclocking-backend/internal/circuitbreaker"
 	"github.com/camiloengineer/autoclocking-backend/internal/config"
 	"github.com/camiloengineer/autoclocking-backend/internal/delay"
 	"github.com/camiloengineer/autoclocking-backend/internal/metrics"
 	"github.com/camiloengineer/autoclocking-backend/internal/reporter"
-	"github.com/camiloengineer/autoclocking-backend/internal/rut"
 	"github.com/camiloengineer/autoclocking-backend/internal/schedule"
-	"github.com/chromedp/cdproto/emulation"
-	"github.com/chromedp/chromedp"
 )
+
+const markTimeout = 60 * time.Second
 
 type Service struct {
 	reporter       *reporter.Reporter
@@ -45,17 +45,18 @@ func New(rep *reporter.Reporter, delayMgr *delay.Manager, debug bool, execCfg co
 	}
 }
 
-func (s *Service) ProcessRUT(rutStr string) bool {
-	rutMasked := rut.Mask(rutStr)
-	rutKey := rut.Key(rutStr)
+// ProcessAccount runs the full mark cycle for one Buk account with retry,
+// circuit-breaker and delay guards. It returns true when the mark succeeded.
+func (s *Service) ProcessAccount(account accounts.Account) bool {
+	emailMasked := accounts.Mask(account.Email)
 	startTime := time.Now()
 
 	if !s.circuitBreaker.CanExecute() {
-		slog.Warn("Circuit breaker OPEN - skipping RUT", "rut", rutMasked)
+		slog.Warn("Circuit breaker OPEN - skipping account", "email", emailMasked)
 		return false
 	}
 
-	slog.Info("STARTING RUT", "rut", rutMasked)
+	slog.Info("STARTING ACCOUNT", "email", emailMasked)
 	s.metrics.RecordRUTStart()
 
 	maxAttempts := s.execConfig.RetryAttempts + 1
@@ -64,18 +65,18 @@ func (s *Service) ProcessRUT(rutStr string) bool {
 	}
 
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		success, err := s.processAttempt(rutStr, rutMasked, rutKey, attempt, maxAttempts)
+		success, err := s.processAttempt(account, emailMasked, attempt, maxAttempts)
 		if success {
 			duration := time.Since(startTime).Seconds()
 			actionType := s.determineActionType()
 
-			slog.Info("RUT processed successfully", "rut", rutMasked, "action_type", actionType, "duration", duration)
+			slog.Info("Account processed successfully", "email", emailMasked, "action_type", actionType, "duration", duration)
 			s.metrics.RecordSuccess(duration)
 			s.circuitBreaker.RecordSuccess()
 			return true
 		}
 
-		slog.Error(fmt.Sprintf("Attempt %d/%d failed for RUT %s: %v", attempt, maxAttempts, rutMasked, err))
+		slog.Error(fmt.Sprintf("Attempt %d/%d failed for %s: %v", attempt, maxAttempts, emailMasked, err))
 
 		if attempt < maxAttempts {
 			retryDelay := time.Duration(s.execConfig.RetryDelaySeconds) * time.Second
@@ -89,13 +90,13 @@ func (s *Service) ProcessRUT(rutStr string) bool {
 	return false
 }
 
-func (s *Service) processAttempt(rutStr, rutMasked, rutKey string, attempt, maxAttempts int) (bool, error) {
-	slog.Info(fmt.Sprintf("Attempt %d/%d - Starting RUT %s", attempt, maxAttempts, rutMasked))
+func (s *Service) processAttempt(account accounts.Account, emailMasked string, attempt, maxAttempts int) (bool, error) {
+	slog.Info(fmt.Sprintf("Attempt %d/%d - Starting %s", attempt, maxAttempts, emailMasked))
 
 	actionType := s.determineActionType()
-	s.applyDelay(rutStr, actionType)
+	s.applyDelay(account.Email, actionType)
 
-	slog.Info("EXECUTING marking", "rut", rutMasked, "action_type", actionType)
+	slog.Info("EXECUTING marking", "email", emailMasked, "action_type", actionType)
 
 	var result ExecutionResult
 	var err error
@@ -107,38 +108,38 @@ func (s *Service) processAttempt(rutStr, rutMasked, rutKey string, attempt, maxA
 			Status:  "info",
 		}
 	} else {
-		result, err = s.executeRealMarcaje(rutStr, actionType)
+		result, err = s.executeRealMarcaje(account, actionType)
 		if err != nil {
-			s.reporter.Report(actionType, "error", failureSummary(actionType), fmt.Sprintf("RUT %s\n%v", rutMasked, err), rutMasked, rutKey)
+			s.reporter.Report(actionType, "error", failureSummary(actionType), fmt.Sprintf("%s\n%v", emailMasked, err), emailMasked)
 			return false, err
 		}
 	}
 
-	slog.Info("MARKING COMPLETED", "rut", rutMasked, "action_type", actionType, "status", result.Status)
-	s.reporter.Report(actionType, result.Status, result.Message, result.Details, rutMasked, rutKey)
+	slog.Info("MARKING COMPLETED", "email", emailMasked, "action_type", actionType, "status", result.Status)
+	s.reporter.Report(actionType, result.Status, result.Message, result.Details, emailMasked)
 	return true, nil
 }
 
-func (s *Service) applyDelay(rutStr, actionType string) {
+func (s *Service) applyDelay(email, actionType string) {
 	if s.debugMode {
-		slog.Info("DEBUG mode active: no delay", "rut", rut.Mask(rutStr))
+		slog.Info("DEBUG mode active: no delay", "email", accounts.Mask(email))
 		return
 	}
 
-	delayMins := s.delayManager.GetRandomDelay(rutStr)
+	delayMins := s.delayManager.GetRandomDelay(email)
 	s.metrics.RecordDelayApplied()
 
 	if actionType == "ENTRADA" {
-		s.waitForEntryAnchor(rutStr, delayMins)
+		s.waitForEntryAnchor(email, delayMins)
 		return
 	}
 
-	slog.Info(fmt.Sprintf("Applying delay of %d minutes for RUT %s", delayMins, rut.Mask(rutStr)))
+	slog.Info(fmt.Sprintf("Applying delay of %d minutes for %s", delayMins, accounts.Mask(email)))
 	time.Sleep(time.Duration(delayMins) * time.Minute)
-	slog.Info(fmt.Sprintf("Delay completed for RUT %s", rut.Mask(rutStr)))
+	slog.Info(fmt.Sprintf("Delay completed for %s", accounts.Mask(email)))
 }
 
-func (s *Service) waitForEntryAnchor(rutStr string, delayMins int) {
+func (s *Service) waitForEntryAnchor(email string, delayMins int) {
 	loc, err := time.LoadLocation("America/Santiago")
 	if err != nil {
 		slog.Error("Could not load America/Santiago timezone; applying delay from now", "error", err)
@@ -152,13 +153,13 @@ func (s *Service) waitForEntryAnchor(rutStr string, delayMins int) {
 
 	wait := time.Until(target)
 	if wait <= 0 {
-		slog.Info(fmt.Sprintf("Entry anchor %s already passed; marking immediately for RUT %s", target.Format("15:04"), rut.Mask(rutStr)))
+		slog.Info(fmt.Sprintf("Entry anchor %s already passed; marking immediately for %s", target.Format("15:04"), accounts.Mask(email)))
 		return
 	}
 
-	slog.Info(fmt.Sprintf("Waiting until %s (anchor 08:00 + %d min) for RUT %s", target.Format("15:04"), delayMins, rut.Mask(rutStr)))
+	slog.Info(fmt.Sprintf("Waiting until %s (anchor 08:00 + %d min) for %s", target.Format("15:04"), delayMins, accounts.Mask(email)))
 	time.Sleep(wait)
-	slog.Info(fmt.Sprintf("Anchored wait completed for RUT %s", rut.Mask(rutStr)))
+	slog.Info(fmt.Sprintf("Anchored wait completed for %s", accounts.Mask(email)))
 }
 
 func (s *Service) determineActionType() string {
@@ -170,219 +171,46 @@ func (s *Service) determineActionType() string {
 	return "SALIDA"
 }
 
-func (s *Service) executeRealMarcaje(rutStr, actionType string) (ExecutionResult, error) {
-	opts := append(chromedp.DefaultExecAllocatorOptions[:],
-		chromedp.Flag("no-sandbox", true),
-		chromedp.Flag("disable-dev-shm-usage", true),
-		chromedp.Flag("disable-gpu", true),
-		chromedp.Flag("disable-software-rasterizer", true),
-		chromedp.WindowSize(1920, 1080),
-		chromedp.Flag("disable-geolocation", true),
-		chromedp.Flag("disable-extensions", true),
-		chromedp.Flag("disable-plugins", true),
-		chromedp.Flag("disable-images", true),
-		chromedp.UserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"),
-		chromedp.WSURLReadTimeout(40*time.Second),
-	)
+func (s *Service) executeRealMarcaje(account accounts.Account, actionType string) (ExecutionResult, error) {
+	client, err := buk.New()
+	if err != nil {
+		return ExecutionResult{}, fmt.Errorf("buk client: %w", err)
+	}
 
-	allocCtx, cancel := chromedp.NewExecAllocator(context.Background(), opts...)
+	ctx, cancel := context.WithTimeout(context.Background(), markTimeout)
 	defer cancel()
 
-	ctx, cancel := chromedp.NewContext(allocCtx)
-	defer cancel()
-
-	ctx, cancel = context.WithTimeout(ctx, 45*time.Second)
-	defer cancel()
-
-	if err := chromedp.Run(ctx,
-		chromedp.Navigate("https://app.ctrlit.cl/ctrl/dial/web/K1NBpBqyjf"),
-		chromedp.WaitVisible(`#dial button`, chromedp.ByQuery),
-	); err != nil {
-		return ExecutionResult{}, fmt.Errorf("failed to navigate and wait for action buttons: %w", err)
+	if err := client.Login(ctx, account.Email, account.Password); err != nil {
+		return ExecutionResult{}, fmt.Errorf("login failed: %w", err)
 	}
 
-	// Disable geolocation
-	err := chromedp.Run(ctx, chromedp.Evaluate(`
-		navigator.geolocation.getCurrentPosition = function(success, error) {
-			if (error) error({ code: 1, message: 'User denied Geolocation' });
-		};
-		navigator.geolocation.watchPosition = function() { return null; };
-	`, nil))
+	portal, err := client.LoadPortal(ctx)
 	if err != nil {
-		slog.Warn("Failed to disable geolocation via JS", "error", err)
+		return ExecutionResult{}, fmt.Errorf("load portal: %w", err)
+	}
+	if account.JobID != "" {
+		portal.JobID = account.JobID
 	}
 
-	err = chromedp.Run(ctx, emulation.SetGeolocationOverride().WithLatitude(0).WithLongitude(0).WithAccuracy(0))
+	result, err := client.Mark(ctx, portal, actionType)
 	if err != nil {
-		slog.Warn("Failed to set geolocation override via CDP", "error", err)
+		return ExecutionResult{}, fmt.Errorf("mark: %w", err)
 	}
 
-	time.Sleep(2 * time.Second)
-
-	// Click action button
-	err = s.clickActionButton(ctx, actionType)
-	if err != nil {
-		return ExecutionResult{}, fmt.Errorf("failed to click action button: %w", err)
-	}
-
-	if err := chromedp.Run(ctx, chromedp.WaitVisible(`li.digits`, chromedp.ByQuery)); err != nil {
-		return ExecutionResult{}, fmt.Errorf("failed to wait for RUT keypad after action: %w", err)
-	}
-
-	// Enter RUT
-	err = s.enterRUT(ctx, rutStr)
-	if err != nil {
-		return ExecutionResult{}, fmt.Errorf("failed to enter RUT: %w", err)
-	}
-
-	// Submit form
-	portalText, err := s.submitForm(ctx)
-	if err != nil {
-		return ExecutionResult{}, fmt.Errorf("failed to submit form: %w", err)
-	}
-	portalText = sanitizePortalText(portalText, rutStr)
-
-	loc, _ := time.LoadLocation("America/Santiago")
-	now := time.Now().In(loc)
-
-	normalizedPortalText := strings.ToLower(portalText)
-	if strings.Contains(normalizedPortalText, "marcas en mismo sentido") {
+	if result.Duplicate {
 		return ExecutionResult{
 			Message: duplicateSummary(actionType),
 			Details: duplicateDetails(actionType),
 			Status:  "info",
 		}, nil
 	}
-	if !strings.Contains(normalizedPortalText, "confirmar") {
-		return ExecutionResult{}, fmt.Errorf("portal response did not include a success confirmation: %s", strings.TrimSpace(portalText))
-	}
 
+	loc, _ := time.LoadLocation("America/Santiago")
 	return ExecutionResult{
 		Message: confirmedSummary(actionType),
-		Details: confirmedDetails(now.Format("15:04:05")),
+		Details: confirmedDetails(time.Now().In(loc).Format("15:04:05")),
 		Status:  "success",
 	}, nil
-}
-
-func (s *Service) clickActionButton(ctx context.Context, actionType string) error {
-	// We need to find the button that has the exact text.
-	// Since chromedp doesn't have an exact text selector built-in, we use JS.
-	js := fmt.Sprintf(`
-		var els = document.querySelectorAll('button, div, span, li');
-		var target = null;
-		for (var i = 0; i < els.length; i++) {
-			if (els[i].textContent.trim().toUpperCase() === '%s') {
-				target = els[i];
-				break;
-			}
-		}
-		if (target) { target.click(); 'ok'; } else { 'not found'; }
-	`, actionType)
-
-	var res string
-	if err := chromedp.Run(ctx, chromedp.Evaluate(js, &res)); err != nil {
-		return err
-	}
-	if res != "ok" {
-		return fmt.Errorf("button %s not found", actionType)
-	}
-	time.Sleep(2 * time.Second)
-	return nil
-}
-
-func (s *Service) enterRUT(ctx context.Context, rutStr string) error {
-	for _, ch := range rutStr {
-		charUpper := strings.ToUpper(string(ch))
-
-		js := fmt.Sprintf(`
-			var els = document.querySelectorAll('li.digits');
-			var target = null;
-			for (var i = 0; i < els.length; i++) {
-				if (els[i].textContent.trim().toUpperCase() === '%s') {
-					target = els[i];
-					break;
-				}
-			}
-			if (target) { target.click(); 'ok'; } else { 'not found'; }
-		`, charUpper)
-
-		var res string
-		if err := chromedp.Run(ctx, chromedp.Evaluate(js, &res)); err != nil {
-			return fmt.Errorf("error clicking %s: %w", charUpper, err)
-		}
-		if res != "ok" {
-			return fmt.Errorf("digit button %s not found", charUpper)
-		}
-		time.Sleep(300 * time.Millisecond)
-	}
-	time.Sleep(1 * time.Second)
-	return nil
-}
-
-func (s *Service) submitForm(ctx context.Context) (string, error) {
-	js := `
-		var els = document.querySelectorAll('li.pad-action.digits');
-		var target = null;
-		for (var i = 0; i < els.length; i++) {
-			if (els[i].textContent.trim().toUpperCase() === 'ENVIAR') {
-				target = els[i];
-				break;
-			}
-		}
-		if (target) { target.click(); 'ok'; } else { 'not found'; }
-	`
-	var res string
-	if err := chromedp.Run(ctx, chromedp.Evaluate(js, &res)); err != nil {
-		return "", err
-	}
-	if res != "ok" {
-		return "", fmt.Errorf("ENVIAR button not found")
-	}
-	time.Sleep(2 * time.Second)
-
-	var readyState string
-	if err := chromedp.Run(ctx, chromedp.Evaluate(`document.readyState`, &readyState)); err != nil {
-		return "", fmt.Errorf("browser did not remain reachable after submit: %w", err)
-	}
-	if readyState == "" {
-		return "", fmt.Errorf("browser returned empty ready state after submit")
-	}
-
-	var bodyText string
-	if err := chromedp.Run(ctx, chromedp.Text(`body`, &bodyText, chromedp.ByQuery)); err != nil {
-		return "", fmt.Errorf("failed to read portal response after submit: %w", err)
-	}
-	slog.Info("Portal response after submit", "body_text", strings.TrimSpace(bodyText))
-
-	return bodyText, nil
-}
-
-func sanitizePortalText(bodyText, rutStr string) string {
-	replacer := strings.NewReplacer("\r\n", "\n", "\r", "\n")
-	normalized := replacer.Replace(bodyText)
-	normalized = strings.ReplaceAll(normalized, rutStr, rut.Mask(rutStr))
-
-	lines := strings.Split(normalized, "\n")
-	cleaned := make([]string, 0, len(lines))
-	blankStreak := 0
-	whitespacePattern := regexp.MustCompile(`\s+`)
-
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" {
-			blankStreak++
-			if blankStreak > 1 {
-				continue
-			}
-			cleaned = append(cleaned, "")
-			continue
-		}
-
-		blankStreak = 0
-		cleaned = append(cleaned, whitespacePattern.ReplaceAllString(trimmed, " "))
-	}
-
-	return strings.TrimSpace(strings.Join(cleaned, "\n"))
 }
 
 func actionSummary(actionType string) string {

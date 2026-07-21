@@ -1,10 +1,13 @@
 package main
 
 import (
+	"context"
 	"log/slog"
 	"os"
 	"sync"
 
+	"github.com/camiloengineer/autoclocking-backend/internal/accounts"
+	"github.com/camiloengineer/autoclocking-backend/internal/accountsstore"
 	"github.com/camiloengineer/autoclocking-backend/internal/circuitbreaker"
 	"github.com/camiloengineer/autoclocking-backend/internal/config"
 	"github.com/camiloengineer/autoclocking-backend/internal/delay"
@@ -12,7 +15,6 @@ import (
 	"github.com/camiloengineer/autoclocking-backend/internal/marcaje"
 	"github.com/camiloengineer/autoclocking-backend/internal/metrics"
 	"github.com/camiloengineer/autoclocking-backend/internal/reporter"
-	"github.com/camiloengineer/autoclocking-backend/internal/rut"
 	"github.com/camiloengineer/autoclocking-backend/internal/schedule"
 )
 
@@ -35,17 +37,36 @@ func main() {
 		os.Exit(0)
 	}
 
-	var maskedRuts []string
-	for _, r := range cfg.ActiveRUTs {
-		if !rut.IsValid(r) {
-			slog.Error("Configuration contains invalid RUT", "rut", rut.Mask(r))
-			os.Exit(1)
+	ctx := context.Background()
+	store, closeStore, err := accountsstore.FromEnv(ctx)
+	if err != nil {
+		slog.Error("Failed to build accounts store", "error", err)
+		os.Exit(1)
+	}
+	defer func() { _ = closeStore() }()
+
+	all, err := store.List(ctx)
+	if err != nil {
+		slog.Error("Failed to load accounts", "error", err)
+		os.Exit(1)
+	}
+
+	active := make([]accounts.Account, 0, len(all))
+	maskedEmails := make([]string, 0, len(all))
+	for _, account := range all {
+		if account.Active {
+			active = append(active, account)
+			maskedEmails = append(maskedEmails, accounts.Mask(account.Email))
 		}
-		maskedRuts = append(maskedRuts, rut.Mask(r))
+	}
+
+	if len(active) == 0 {
+		slog.Info("No active accounts to process. Terminating execution.")
+		os.Exit(0)
 	}
 
 	rep := reporter.New()
-	holidaySvc := holiday.New(rep, len(cfg.ActiveRUTs), maskedRuts)
+	holidaySvc := holiday.New(rep, len(active), maskedEmails)
 
 	if holidaySvc.IsHoliday() {
 		os.Exit(0)
@@ -57,21 +78,21 @@ func main() {
 
 	marcajeSvc := marcaje.New(rep, delayMgr, cfg.DebugMode, cfg.Execution, metricsCol, cb)
 
-	processRUTs(cfg, marcajeSvc, metricsCol)
+	processAccounts(active, marcajeSvc, cfg, metricsCol)
 }
 
-func processRUTs(cfg *config.Config, marcajeSvc *marcaje.Service, metricsCol *metrics.Collector) {
-	slog.Info("Starting parallel processing", "total_ruts", len(cfg.ActiveRUTs))
+func processAccounts(active []accounts.Account, marcajeSvc *marcaje.Service, cfg *config.Config, metricsCol *metrics.Collector) {
+	slog.Info("Starting parallel processing", "total_accounts", len(active))
 
 	var wg sync.WaitGroup
 
-	for _, r := range cfg.ActiveRUTs {
+	for _, account := range active {
 		wg.Add(1)
 
-		go func(r string) {
+		go func(a accounts.Account) {
 			defer wg.Done()
-			marcajeSvc.ProcessRUT(r)
-		}(r)
+			marcajeSvc.ProcessAccount(a)
+		}(account)
 	}
 
 	wg.Wait()

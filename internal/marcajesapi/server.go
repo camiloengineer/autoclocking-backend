@@ -8,17 +8,18 @@ import (
 	"strings"
 	"time"
 
+	"github.com/camiloengineer/autoclocking-backend/internal/accounts"
+	"github.com/camiloengineer/autoclocking-backend/internal/buk"
 	"github.com/camiloengineer/autoclocking-backend/internal/marcajes"
-	"github.com/camiloengineer/autoclocking-backend/internal/ruts"
 )
 
 type Server struct {
-	store    marcajes.Store
-	rutStore ruts.Store
+	store        marcajes.Store
+	accountStore accounts.Store
 }
 
-func NewServer(store marcajes.Store, rutStore ruts.Store) *Server {
-	return &Server{store: store, rutStore: rutStore}
+func NewServer(store marcajes.Store, accountStore accounts.Store) *Server {
+	return &Server{store: store, accountStore: accountStore}
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -33,8 +34,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if r.URL.Path == "/ruts" || strings.HasPrefix(r.URL.Path, "/ruts/") {
-		s.handleRUTs(w, r)
+	if r.URL.Path == "/accounts" {
+		s.handleAccounts(w, r)
+		return
+	}
+	if strings.HasPrefix(r.URL.Path, "/accounts/") {
+		s.handleAccountByEmail(w, r)
 		return
 	}
 
@@ -52,37 +57,29 @@ func (s *Server) handleMarcajes(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) handleRUTs(w http.ResponseWriter, r *http.Request) {
-	rawRUT := strings.TrimPrefix(r.URL.Path, "/ruts/")
-	if rawRUT == r.URL.Path {
-		rawRUT = ""
+func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		s.handleListAccounts(w, r)
+	case http.MethodPost:
+		s.handleCreateAccount(w, r)
+	default:
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "Method not supported"})
+	}
+}
+
+func (s *Server) handleAccountByEmail(w http.ResponseWriter, r *http.Request) {
+	rawEmail := strings.TrimPrefix(r.URL.Path, "/accounts/")
+	if rawEmail == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "email is required"})
+		return
 	}
 
 	switch r.Method {
-	case http.MethodGet:
-		if rawRUT != "" {
-			writeJSON(w, http.StatusNotFound, map[string]string{"error": "RUT endpoint not found"})
-			return
-		}
-		s.handleListRUTs(w, r)
-	case http.MethodPost:
-		if rawRUT != "" {
-			writeJSON(w, http.StatusNotFound, map[string]string{"error": "RUT endpoint not found"})
-			return
-		}
-		s.handleSaveRUT(w, r)
 	case http.MethodPatch:
-		if rawRUT == "" {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "RUT is required"})
-			return
-		}
-		s.handleUpdateRUT(w, r, rawRUT)
+		s.handleUpdateAccount(w, r, rawEmail)
 	case http.MethodDelete:
-		if rawRUT == "" {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "RUT is required"})
-			return
-		}
-		s.handleDeleteRUT(w, r, rawRUT)
+		s.handleDeleteAccount(w, r, rawEmail)
 	default:
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "Method not supported"})
 	}
@@ -125,27 +122,61 @@ func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-type rutPayload struct {
-	RUT    string `json:"rut"`
-	Active *bool  `json:"active"`
+type accountPayload struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
+	Active   *bool  `json:"active"`
 }
 
-func (s *Server) handleListRUTs(w http.ResponseWriter, r *http.Request) {
-	items, err := s.rutStore.ListRUTs(r.Context())
+func (s *Server) handleListAccounts(w http.ResponseWriter, r *http.Request) {
+	items, err := s.accountStore.List(r.Context())
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to list RUTs"})
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to list accounts"})
 		return
 	}
 
-	writeJSON(w, http.StatusOK, ruts.Response{
-		Count: len(items),
-		Items: items,
-	})
+	views := make([]accounts.View, 0, len(items))
+	for _, item := range items {
+		views = append(views, item.Redact())
+	}
+
+	writeJSON(w, http.StatusOK, accounts.Response{Count: len(views), Items: views})
 }
 
-func (s *Server) handleSaveRUT(w http.ResponseWriter, r *http.Request) {
-	payload, ok := decodeRUTPayload(w, r)
-	if !ok {
+func (s *Server) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
+	var payload accountPayload
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "JSON body is required"})
+		return
+	}
+
+	email := accounts.NormalizeEmail(payload.Email)
+	if email == "" || strings.TrimSpace(payload.Password) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "email and password are required"})
+		return
+	}
+
+	client, err := buk.New()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to build Buk client"})
+		return
+	}
+
+	if err := client.Login(r.Context(), email, payload.Password); err != nil {
+		switch {
+		case errors.Is(err, buk.ErrInvalidCredentials):
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "Email o contraseña de Buk incorrectos", "code": "invalid_credentials"})
+		case errors.Is(err, buk.ErrLocked):
+			writeJSON(w, http.StatusLocked, map[string]string{"error": "Cuenta bloqueada por Buk; revisa tu correo para desbloquearla", "code": "account_locked"})
+		default:
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": "No se pudo validar contra Buk", "code": "buk_unreachable"})
+		}
+		return
+	}
+
+	portal, err := client.LoadPortal(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "No se pudo leer el portal de Buk", "code": "buk_unreachable"})
 		return
 	}
 
@@ -154,24 +185,26 @@ func (s *Server) handleSaveRUT(w http.ResponseWriter, r *http.Request) {
 		active = *payload.Active
 	}
 
-	record, err := ruts.NewRecord(payload.RUT, active)
+	account, err := accounts.NewAccount(email, payload.Password, active)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
+	account.JobID = portal.JobID
 
-	saved, err := s.rutStore.SaveRUT(r.Context(), record)
+	saved, err := s.accountStore.Save(r.Context(), account)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to save RUT"})
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to save account"})
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, saved)
+	writeJSON(w, http.StatusCreated, saved.Redact())
 }
 
-func (s *Server) handleUpdateRUT(w http.ResponseWriter, r *http.Request, rawRUT string) {
-	payload, ok := decodeRUTPayload(w, r)
-	if !ok {
+func (s *Server) handleUpdateAccount(w http.ResponseWriter, r *http.Request, rawEmail string) {
+	var payload accountPayload
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "JSON body is required"})
 		return
 	}
 	if payload.Active == nil {
@@ -179,42 +212,30 @@ func (s *Server) handleUpdateRUT(w http.ResponseWriter, r *http.Request, rawRUT 
 		return
 	}
 
-	record, err := ruts.NewRecord(rawRUT, *payload.Active)
+	saved, err := s.accountStore.SetActive(r.Context(), rawEmail, *payload.Active)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
-	}
-
-	saved, err := s.rutStore.SaveRUT(r.Context(), record)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to update RUT"})
-		return
-	}
-
-	writeJSON(w, http.StatusOK, saved)
-}
-
-func (s *Server) handleDeleteRUT(w http.ResponseWriter, r *http.Request, rawRUT string) {
-	if err := s.rutStore.DeleteRUT(r.Context(), rawRUT); err != nil {
-		if errors.Is(err, ruts.ErrNotFound) {
-			writeJSON(w, http.StatusNotFound, map[string]string{"error": "RUT not found"})
+		if errors.Is(err, accounts.ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "Account not found"})
 			return
 		}
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to delete RUT"})
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to update account"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, saved.Redact())
+}
+
+func (s *Server) handleDeleteAccount(w http.ResponseWriter, r *http.Request, rawEmail string) {
+	if err := s.accountStore.Delete(r.Context(), rawEmail); err != nil {
+		if errors.Is(err, accounts.ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "Account not found"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to delete account"})
 		return
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
-}
-
-func decodeRUTPayload(w http.ResponseWriter, r *http.Request) (rutPayload, bool) {
-	var payload rutPayload
-	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "JSON body is required"})
-		return rutPayload{}, false
-	}
-
-	return payload, true
 }
 
 func parseLimit(raw string) int {

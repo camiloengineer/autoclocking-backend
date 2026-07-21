@@ -13,20 +13,20 @@ import (
 
 // Service checks for holidays in Chile.
 type Service struct {
-	reporter         *reporter.Reporter
-	activeRutsCount  int
-	activeRutsMasked []string
-	apiURL           string
-	httpClient       *http.Client
+	reporter             *reporter.Reporter
+	activeAccountsCount  int
+	activeAccountsMasked []string
+	apiURL               string
+	httpClient           *http.Client
 }
 
 // New creates a new Holiday Service.
-func New(rep *reporter.Reporter, activeRutsCount int, activeRutsMasked []string) *Service {
+func New(rep *reporter.Reporter, activeAccountsCount int, activeAccountsMasked []string) *Service {
 	return &Service{
-		reporter:         rep,
-		activeRutsCount:  activeRutsCount,
-		activeRutsMasked: activeRutsMasked,
-		apiURL:           "https://api.boostr.cl/holidays.json",
+		reporter:             rep,
+		activeAccountsCount:  activeAccountsCount,
+		activeAccountsMasked: activeAccountsMasked,
+		apiURL:               "https://api.boostr.cl/holidays.json",
 		httpClient: &http.Client{
 			Timeout: 5 * time.Second,
 		},
@@ -74,11 +74,11 @@ func (s *Service) IsHoliday() bool {
 }
 
 func (s *Service) reportHoliday(holiday Holiday, source string) {
-	maskedStr := strings.Join(s.activeRutsMasked, ", ")
-	details := fmt.Sprintf("Holiday: %s (%s). Source: %s. Configured RUTs: %d - [%s]",
-		holiday.Title, holiday.Type, source, s.activeRutsCount, maskedStr)
+	maskedStr := strings.Join(s.activeAccountsMasked, ", ")
+	details := fmt.Sprintf("Holiday: %s (%s). Source: %s. Configured accounts: %d - [%s]",
+		holiday.Title, holiday.Type, source, s.activeAccountsCount, maskedStr)
 
-	s.reporter.Report("FERIADO", "info", "Holiday detected", details, maskedStr, "")
+	s.reporter.Report("FERIADO", "info", "Holiday detected", details, maskedStr)
 }
 
 func (s *Service) checkOnlineAPI(today string) (Holiday, bool) {
