@@ -9,17 +9,27 @@ import (
 	"time"
 
 	"github.com/camiloengineer/autoclocking-backend/internal/accounts"
-	"github.com/camiloengineer/autoclocking-backend/internal/buk"
+	"github.com/camiloengineer/autoclocking-backend/internal/loginthrottle"
 	"github.com/camiloengineer/autoclocking-backend/internal/marcajes"
 )
 
 type Server struct {
 	store        marcajes.Store
 	accountStore accounts.Store
+	adminEmails  map[string]bool
+	throttle     *loginthrottle.Throttle
 }
 
-func NewServer(store marcajes.Store, accountStore accounts.Store) *Server {
-	return &Server{store: store, accountStore: accountStore}
+// NewServer wires the API over its stores; adminEmails lists the normalized
+// emails that the session endpoint reports back as administrators.
+func NewServer(store marcajes.Store, accountStore accounts.Store, adminEmails []string) *Server {
+	admins := make(map[string]bool, len(adminEmails))
+	for _, email := range adminEmails {
+		if normalized := accounts.NormalizeEmail(email); normalized != "" {
+			admins[normalized] = true
+		}
+	}
+	return &Server{store: store, accountStore: accountStore, adminEmails: admins, throttle: loginthrottle.New()}
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -31,6 +41,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if r.URL.Path == "/marcajes" {
 		s.handleMarcajes(w, r)
+		return
+	}
+
+	if r.URL.Path == "/auth/session" {
+		s.handleCreateSession(w, r)
 		return
 	}
 
@@ -61,8 +76,6 @@ func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		s.handleListAccounts(w, r)
-	case http.MethodPost:
-		s.handleCreateAccount(w, r)
 	default:
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "Method not supported"})
 	}
@@ -123,9 +136,7 @@ func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 }
 
 type accountPayload struct {
-	Email    string `json:"email"`
-	Password string `json:"password"`
-	Active   *bool  `json:"active"`
+	Active *bool `json:"active"`
 }
 
 func (s *Server) handleListAccounts(w http.ResponseWriter, r *http.Request) {
@@ -141,64 +152,6 @@ func (s *Server) handleListAccounts(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, accounts.Response{Count: len(views), Items: views})
-}
-
-func (s *Server) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
-	var payload accountPayload
-	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "JSON body is required"})
-		return
-	}
-
-	email := accounts.NormalizeEmail(payload.Email)
-	if email == "" || strings.TrimSpace(payload.Password) == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "email and password are required"})
-		return
-	}
-
-	client, err := buk.New()
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to build Buk client"})
-		return
-	}
-
-	if err := client.Login(r.Context(), email, payload.Password); err != nil {
-		switch {
-		case errors.Is(err, buk.ErrInvalidCredentials):
-			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "Email o contraseña de Buk incorrectos", "code": "invalid_credentials"})
-		case errors.Is(err, buk.ErrLocked):
-			writeJSON(w, http.StatusLocked, map[string]string{"error": "Cuenta bloqueada por Buk; revisa tu correo para desbloquearla", "code": "account_locked"})
-		default:
-			writeJSON(w, http.StatusBadGateway, map[string]string{"error": "No se pudo validar contra Buk", "code": "buk_unreachable"})
-		}
-		return
-	}
-
-	portal, err := client.LoadPortal(r.Context())
-	if err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "No se pudo leer el portal de Buk", "code": "buk_unreachable"})
-		return
-	}
-
-	active := true
-	if payload.Active != nil {
-		active = *payload.Active
-	}
-
-	account, err := accounts.NewAccount(email, payload.Password, active)
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
-	}
-	account.JobID = portal.JobID
-
-	saved, err := s.accountStore.Save(r.Context(), account)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to save account"})
-		return
-	}
-
-	writeJSON(w, http.StatusCreated, saved.Redact())
 }
 
 func (s *Server) handleUpdateAccount(w http.ResponseWriter, r *http.Request, rawEmail string) {

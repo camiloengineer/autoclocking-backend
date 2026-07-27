@@ -59,7 +59,12 @@ func main() {
 	}
 	defer func() { _ = closeAccounts() }()
 
-	server := marcajesapi.NewServer(store, accountStore)
+	adminEmails := splitCommaList(os.Getenv("ADMIN_EMAILS"))
+	if len(adminEmails) == 0 {
+		slog.Warn("ADMIN_EMAILS is empty: no session will be reported as admin")
+	}
+
+	server := marcajesapi.NewServer(store, accountStore, adminEmails)
 
 	port := getEnvOrDefault("PORT", "8080")
 	addr := ":" + port
@@ -81,6 +86,16 @@ func getEnvOrDefault(key, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func splitCommaList(raw string) []string {
+	values := []string{}
+	for _, part := range strings.Split(raw, ",") {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			values = append(values, trimmed)
+		}
+	}
+	return values
 }
 
 func firstNonEmpty(values ...string) string {
