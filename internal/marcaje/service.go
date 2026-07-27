@@ -17,7 +17,7 @@ import (
 	"github.com/camiloengineer/autoclocking-backend/internal/schedule"
 )
 
-const markTimeout = 60 * time.Second
+const markTimeout = 180 * time.Second
 
 type Service struct {
 	reporter       *reporter.Reporter
