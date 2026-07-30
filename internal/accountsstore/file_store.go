@@ -14,7 +14,7 @@ import (
 
 type fileRecord struct {
 	Email       string    `json:"email"`
-	PasswordB64 string    `json:"password_b64"`
+	PasswordEnc string    `json:"password_enc"`
 	JobID       string    `json:"job_id"`
 	Active      bool      `json:"active"`
 	CreatedAt   time.Time `json:"created_at"`
@@ -22,7 +22,7 @@ type fileRecord struct {
 }
 
 // FileStore persists accounts as a JSON array on the local filesystem, for
-// local development and DEBUG runs. The password is base64 encoded at rest.
+// local development and DEBUG runs. The password is encrypted at rest.
 type FileStore struct {
 	path string
 	mu   sync.Mutex
@@ -154,7 +154,7 @@ func (s *FileStore) readUnlocked() ([]accounts.Account, error) {
 	}
 	records := make([]accounts.Account, 0, len(raw))
 	for _, item := range raw {
-		password, err := accounts.DecodePassword(item.PasswordB64)
+		password, err := accounts.DecryptPassword(item.Email, item.PasswordEnc)
 		if err != nil {
 			return nil, err
 		}
@@ -173,9 +173,13 @@ func (s *FileStore) readUnlocked() ([]accounts.Account, error) {
 func (s *FileStore) writeUnlocked(records []accounts.Account) error {
 	raw := make([]fileRecord, 0, len(records))
 	for _, record := range records {
+		encrypted, err := accounts.EncryptPassword(record.Email, record.Password)
+		if err != nil {
+			return err
+		}
 		raw = append(raw, fileRecord{
 			Email:       record.Email,
-			PasswordB64: accounts.EncodePassword(record.Password),
+			PasswordEnc: encrypted,
 			JobID:       record.JobID,
 			Active:      record.Active,
 			CreatedAt:   record.CreatedAt,

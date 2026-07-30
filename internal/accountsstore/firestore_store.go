@@ -16,7 +16,7 @@ const accountsCollectionName = "accounts"
 
 type firestoreDoc struct {
 	Email       string    `firestore:"email"`
-	PasswordB64 string    `firestore:"password_b64"`
+	PasswordEnc string    `firestore:"password_enc"`
 	JobID       string    `firestore:"job_id"`
 	Active      bool      `firestore:"active"`
 	CreatedAt   time.Time `firestore:"created_at"`
@@ -24,7 +24,7 @@ type firestoreDoc struct {
 }
 
 // FirestoreStore persists accounts in the "accounts" Firestore collection,
-// keyed by normalized email, with the password base64 encoded at rest.
+// keyed by normalized email, with the password encrypted at rest.
 type FirestoreStore struct {
 	client *firestore.Client
 }
@@ -47,7 +47,11 @@ func (s *FirestoreStore) Seed(ctx context.Context, records []accounts.Account) e
 		if err != nil && !isNotFound(err) {
 			return err
 		}
-		if _, err := ref.Set(ctx, toDoc(record)); err != nil {
+		doc, err := toDoc(record)
+		if err != nil {
+			return err
+		}
+		if _, err := ref.Set(ctx, doc); err != nil {
 			return err
 		}
 	}
@@ -106,7 +110,11 @@ func (s *FirestoreStore) Save(ctx context.Context, record accounts.Account) (acc
 		record.CreatedAt = now
 		record.UpdatedAt = now
 	}
-	if _, err := ref.Set(ctx, toDoc(record)); err != nil {
+	doc, err := toDoc(record)
+	if err != nil {
+		return accounts.Account{}, err
+	}
+	if _, err := ref.Set(ctx, doc); err != nil {
 		return accounts.Account{}, err
 	}
 	return record, nil
@@ -138,7 +146,11 @@ func (s *FirestoreStore) SetActive(ctx context.Context, email string, active boo
 	}
 	record.Active = active
 	record.UpdatedAt = time.Now().UTC()
-	if _, err := ref.Set(ctx, toDoc(record)); err != nil {
+	doc, err := toDoc(record)
+	if err != nil {
+		return accounts.Account{}, err
+	}
+	if _, err := ref.Set(ctx, doc); err != nil {
 		return accounts.Account{}, err
 	}
 	return record, nil
@@ -164,19 +176,23 @@ func (s *FirestoreStore) Delete(ctx context.Context, email string) error {
 	return err
 }
 
-func toDoc(record accounts.Account) firestoreDoc {
+func toDoc(record accounts.Account) (firestoreDoc, error) {
+	encrypted, err := accounts.EncryptPassword(record.Email, record.Password)
+	if err != nil {
+		return firestoreDoc{}, err
+	}
 	return firestoreDoc{
 		Email:       record.Email,
-		PasswordB64: accounts.EncodePassword(record.Password),
+		PasswordEnc: encrypted,
 		JobID:       record.JobID,
 		Active:      record.Active,
 		CreatedAt:   record.CreatedAt,
 		UpdatedAt:   record.UpdatedAt,
-	}
+	}, nil
 }
 
 func fromDoc(raw firestoreDoc) (accounts.Account, error) {
-	password, err := accounts.DecodePassword(raw.PasswordB64)
+	password, err := accounts.DecryptPassword(raw.Email, raw.PasswordEnc)
 	if err != nil {
 		return accounts.Account{}, err
 	}

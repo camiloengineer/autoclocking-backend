@@ -2,11 +2,20 @@ package accounts
 
 import (
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
 	"encoding/base64"
 	"errors"
+	"fmt"
+	"os"
 	"strings"
 	"time"
 )
+
+// EncryptionKeyEnv names the environment variable holding the AES-256 key used
+// to protect passwords at rest, as 32 random bytes in standard base64.
+const EncryptionKeyEnv = "ACCOUNTS_ENCRYPTION_KEY"
 
 // ErrNotFound is returned when an account does not exist in the store.
 var ErrNotFound = errors.New("account not found")
@@ -22,8 +31,8 @@ type Store interface {
 }
 
 // Account is a Buk login (corporate email + password) plus the scraped job id.
-// Password is the plaintext credential held in memory; stores keep it base64
-// encoded at rest. It is never serialized in API list responses.
+// Password is the plaintext credential held in memory; stores keep it
+// encrypted at rest. It is never serialized in API list responses.
 type Account struct {
 	Email     string    `json:"email"`
 	Password  string    `json:"-"`
@@ -83,18 +92,61 @@ func NormalizeEmail(email string) string {
 	return strings.ToLower(strings.TrimSpace(email))
 }
 
-// EncodePassword returns the at-rest (base64) form of a plaintext password.
-func EncodePassword(plain string) string {
-	return base64.StdEncoding.EncodeToString([]byte(plain))
-}
-
-// DecodePassword reverses EncodePassword.
-func DecodePassword(encoded string) (string, error) {
-	raw, err := base64.StdEncoding.DecodeString(encoded)
+// EncryptPassword returns the at-rest form of a plaintext password: the random
+// nonce followed by the AES-256-GCM ciphertext, base64 encoded. The account
+// email is authenticated as additional data, so a ciphertext cannot be moved
+// from one account to another.
+func EncryptPassword(email, plain string) (string, error) {
+	gcm, err := passwordCipher()
 	if err != nil {
 		return "", err
 	}
-	return string(raw), nil
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := rand.Read(nonce); err != nil {
+		return "", fmt.Errorf("generate nonce: %w", err)
+	}
+	sealed := gcm.Seal(nonce, nonce, []byte(plain), []byte(NormalizeEmail(email)))
+	return base64.StdEncoding.EncodeToString(sealed), nil
+}
+
+// DecryptPassword reverses EncryptPassword. It fails, rather than returning
+// garbage, when the key is wrong or the stored value was tampered with.
+func DecryptPassword(email, encrypted string) (string, error) {
+	gcm, err := passwordCipher()
+	if err != nil {
+		return "", err
+	}
+	raw, err := base64.StdEncoding.DecodeString(encrypted)
+	if err != nil {
+		return "", fmt.Errorf("stored password is not valid base64: %w", err)
+	}
+	if len(raw) < gcm.NonceSize() {
+		return "", errors.New("stored password is shorter than a nonce")
+	}
+	plain, err := gcm.Open(nil, raw[:gcm.NonceSize()], raw[gcm.NonceSize():], []byte(NormalizeEmail(email)))
+	if err != nil {
+		return "", fmt.Errorf("decrypt password for %s: %w", Mask(email), err)
+	}
+	return string(plain), nil
+}
+
+func passwordCipher() (cipher.AEAD, error) {
+	encoded := strings.TrimSpace(os.Getenv(EncryptionKeyEnv))
+	if encoded == "" {
+		return nil, fmt.Errorf("%s is not set", EncryptionKeyEnv)
+	}
+	key, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return nil, fmt.Errorf("%s is not valid base64: %w", EncryptionKeyEnv, err)
+	}
+	if len(key) != 32 {
+		return nil, fmt.Errorf("%s must decode to 32 bytes, got %d", EncryptionKeyEnv, len(key))
+	}
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, fmt.Errorf("build aes cipher: %w", err)
+	}
+	return cipher.NewGCM(block)
 }
 
 // Mask returns a log-safe rendering of an email, keeping the domain and the

@@ -15,7 +15,7 @@ const (
 
 	passwordHTML = `<form class="simple_form new_user" id="new_user" action="/users/sign_in" method="post">` +
 		`<input type="hidden" name="authenticity_token" value="PASSWORD_STEP_TOKEN" autocomplete="off">` +
-		`<input type="hidden" name="login_email" value="cgonzalez@robotia.cl">` +
+		`<input type="hidden" name="login_email" value="user@example.com">` +
 		`<input type="password" name="user[password]" id="user_password"></form>`
 
 	failureHTML = signInHTML +
@@ -83,7 +83,7 @@ func TestLoginPortalMarkFlow(t *testing.T) {
 	client := newTestClient(t, server.URL)
 	ctx := context.Background()
 
-	if err := client.Login(ctx, "cgonzalez@robotia.cl", "robotia.."); err != nil {
+	if err := client.Login(ctx, "user@example.com", "test-password"); err != nil {
 		t.Fatalf("Login: %v", err)
 	}
 
@@ -114,7 +114,7 @@ func TestLoginInvalidCredentials(t *testing.T) {
 	server := newTestServer(t, "invalid")
 	client := newTestClient(t, server.URL)
 
-	err := client.Login(context.Background(), "cgonzalez@robotia.cl", "wrong")
+	err := client.Login(context.Background(), "user@example.com", "wrong")
 	if !errors.Is(err, ErrInvalidCredentials) {
 		t.Fatalf("Login error = %v, want ErrInvalidCredentials", err)
 	}
@@ -124,7 +124,7 @@ func TestLoginLocked(t *testing.T) {
 	server := newTestServer(t, "locked")
 	client := newTestClient(t, server.URL)
 
-	err := client.Login(context.Background(), "cgonzalez@robotia.cl", "robotia..")
+	err := client.Login(context.Background(), "user@example.com", "test-password")
 	if !errors.Is(err, ErrLocked) {
 		t.Fatalf("Login error = %v, want ErrLocked", err)
 	}
