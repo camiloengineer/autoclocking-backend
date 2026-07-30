@@ -58,6 +58,7 @@ jobs:
       - name: Ejecutar marcaje
         env:
           ACCOUNTS_STORAGE_BACKEND: firestore
+          ACCOUNTS_ENCRYPTION_KEY: ${{ secrets.ACCOUNTS_ENCRYPTION_KEY }}
           FIRESTORE_PROJECT_ID: reportability-frontend-staging
           CLOCK_IN_ACTIVE: 'true'
           DEBUG_MODE: ${{ github.event.inputs.debug_mode == 'true' && 'true' || 'false' }}
